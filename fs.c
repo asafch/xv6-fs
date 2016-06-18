@@ -25,6 +25,7 @@
 static void itrunc(struct inode*);
 struct superblock sb;   // there should be one per dev, but we run with one dev
 struct mbr mbr;
+uint curr_part = 0;
 
 void
 readmbr(int dev, struct mbr *mbr)
@@ -66,7 +67,7 @@ readsb(int dev, struct superblock *sb)
 {
   struct buf *bp;
   
-  bp = bread(dev, 1);
+  bp = bread(dev, mbr.partitions[curr_part].offset );
   memmove(sb, bp->data, sizeof(*sb));
   brelse(bp);
 }
@@ -94,7 +95,7 @@ balloc(uint dev)
 
   bp = 0;
   for(b = 0; b < sb.size; b += BPB){
-    bp = bread(dev, BBLOCK(b, sb));
+    bp = bread(dev, BBLOCK(b, sb, mbr.partitions[curr_part].offset));
     for(bi = 0; bi < BPB && b + bi < sb.size; bi++){
       m = 1 << (bi % 8);
       if((bp->data[bi/8] & m) == 0){  // Is block free?
@@ -118,7 +119,7 @@ bfree(int dev, uint b)
   int bi, m;
 
   readsb(dev, &sb);
-  bp = bread(dev, BBLOCK(b, sb));
+  bp = bread(dev, BBLOCK(b, sb, mbr.partitions[curr_part].offset));
   bi = b % BPB;
   m = 1 << (bi % 8);
   if((bp->data[bi/8] & m) == 0)
@@ -199,10 +200,11 @@ void
 iinit(int dev)
 {
   initlock(&icache.lock, "icache");
+  readmbr(dev,&mbr);
   readsb(dev, &sb);
   cprintf("sb: size %d nblocks %d ninodes %d nlog %d logstart %d inodestart %d bmap start %d\n", sb.size,
           sb.nblocks, sb.ninodes, sb.nlog, sb.logstart, sb.inodestart, sb.bmapstart);
-  readmbr(dev,&mbr);
+  
 }
 
 static struct inode* iget(uint dev, uint inum);
@@ -218,7 +220,7 @@ ialloc(uint dev, short type)
   struct dinode *dip;
 
   for(inum = 1; inum < sb.ninodes; inum++){
-    bp = bread(dev, IBLOCK(inum, sb));
+    bp = bread(dev, IBLOCK(inum, sb, mbr.partitions[curr_part].offset));
     dip = (struct dinode*)bp->data + inum%IPB;
     if(dip->type == 0){  // a free inode
       memset(dip, 0, sizeof(*dip));
@@ -239,7 +241,7 @@ iupdate(struct inode *ip)
   struct buf *bp;
   struct dinode *dip;
 
-  bp = bread(ip->dev, IBLOCK(ip->inum, sb));
+  bp = bread(ip->dev, IBLOCK(ip->inum, sb,mbr.partitions[curr_part].offset));
   dip = (struct dinode*)bp->data + ip->inum%IPB;
   dip->type = ip->type;
   dip->major = ip->major;
@@ -278,6 +280,7 @@ iget(uint dev, uint inum)
     panic("iget: no inodes");
 
   ip = empty;
+  ip->part = curr_part;
   ip->dev = dev;
   ip->inum = inum;
   ip->ref = 1;
@@ -316,7 +319,7 @@ ilock(struct inode *ip)
   release(&icache.lock);
 
   if(!(ip->flags & I_VALID)){
-    bp = bread(ip->dev, IBLOCK(ip->inum, sb));
+    bp = bread(ip->dev, IBLOCK(ip->inum, sb,mbr.partitions[curr_part].offset));
     dip = (struct dinode*)bp->data + ip->inum%IPB;
     ip->type = dip->type;
     ip->major = dip->major;

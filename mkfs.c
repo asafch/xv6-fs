@@ -12,6 +12,7 @@
 #include "param.h"
 #include "mbr.h"
 
+
 #ifndef static_assert
 #define static_assert(a, b) do { switch (0) case 0: case (a): ; } while (0)
 #endif
@@ -28,11 +29,12 @@ int nmeta;    // Number of meta blocks (boot, sb, nlog, inode, bitmap)
 int nblocks;  // Number of data blocks
 
 int fsfd;
-struct superblock sb;
+struct superblock sb[4];
 struct mbr mbr;
 char zeroes[BSIZE];
 uint freeinode = 1;
 uint freeblock;
+int curr_part = 0;
 
 
 void balloc(int);
@@ -66,6 +68,7 @@ xint(uint x)
   return y;
 }
 
+
 int
 main(int argc, char *argv[])
 {
@@ -92,28 +95,33 @@ main(int argc, char *argv[])
     exit(1);
   }
 
-  // 1 fs block = 1 disk sector
-  nmeta = 2 + nlog + ninodeblocks + nbitmap;
-  nblocks = FSSIZE - nmeta;
-
-//make sure no junk is in mbr before setting it
+    //make sure no junk is in mbr before setting it
   memset(&mbr.bootstrap[0],0,sizeof(uchar)*446);
   memset(&mbr.partitions[0],0,sizeof(struct dpartition)*NPARTITIONS);
   memset(&mbr.magic[0],0,sizeof(uchar)*2);
 
+  //create mbr
   mbr.partitions[0].flags |= PART_ALLOCATED;
   mbr.partitions[0].type = FS_INODE;
-  mbr.partitions[0].offset = 0;
+  mbr.partitions[0].offset = 1;
   mbr.partitions[0].size = FSSIZE;
 
 
-  sb.size = xint(FSSIZE);
-  sb.nblocks = xint(nblocks);
-  sb.ninodes = xint(NINODES);
-  sb.nlog = xint(nlog);
-  sb.logstart = xint(2);
-  sb.inodestart = xint(2+nlog);
-  sb.bmapstart = xint(2+nlog+ninodeblocks);
+  // 1 fs block = 1 disk sector
+  nmeta = 2 + nlog + ninodeblocks + nbitmap;
+  nblocks = FSSIZE - nmeta;
+
+  //set current partition to be initilaized
+  curr_part = 0;
+
+  sb[curr_part].size = xint(FSSIZE);
+  sb[curr_part].nblocks = xint(nblocks);
+  sb[curr_part].ninodes = xint(NINODES);
+  sb[curr_part].nlog = xint(nlog);
+  //changed 2->1 because in partition it is in the 2nd block after sb
+  sb[curr_part].logstart = xint(1);
+  sb[curr_part].inodestart = xint(1+nlog);
+  sb[curr_part].bmapstart = xint(1+nlog+ninodeblocks);
 
   printf("nmeta %d (boot, super, log blocks %u inode blocks %u, bitmap blocks %u) blocks %d total %d\n",
          nmeta, nlog, ninodeblocks, nbitmap, nblocks, FSSIZE);
@@ -123,15 +131,19 @@ main(int argc, char *argv[])
   for(i = 0; i < FSSIZE; i++)
     wsect(i, zeroes);
 
+
   //writing MBR to disk
   memset(buf, 0, sizeof(buf));
   memmove(buf, &mbr, sizeof(mbr));
   wsect(0, buf);
 
-
+  //writing sb to disk
   memset(buf, 0, sizeof(buf));
-  memmove(buf, &sb, sizeof(sb));
-  wsect(1, buf);
+  memmove(buf, &sb[curr_part], sizeof(sb[curr_part]));
+  wsect(mbr.partitions[curr_part].offset + 0, buf);
+
+
+
 
   rootino = ialloc(T_DIR);
   assert(rootino == ROOTINO);
@@ -158,8 +170,10 @@ main(int argc, char *argv[])
     // The binaries are named _rm, _cat, etc. to keep the
     // build operating system from trying to execute them
     // in place of system binaries like rm and cat.
-    if(argv[i][0] == '_')
+    if(argv[i][0] == '_'){
       ++argv[i];
+    }
+      
 
     inum = ialloc(T_FILE);
 
@@ -173,7 +187,6 @@ main(int argc, char *argv[])
 
     close(fd);
   }
-
   // fix size of root inode dir
   rinode(rootino, &din);
   off = xint(din.size);
@@ -206,7 +219,7 @@ winode(uint inum, struct dinode *ip)
   uint bn;
   struct dinode *dip;
 
-  bn = IBLOCK(inum, sb);
+  bn = IBLOCK(inum, sb[curr_part], mbr.partitions[curr_part].offset);
   rsect(bn, buf);
   dip = ((struct dinode*)buf) + (inum % IPB);
   *dip = *ip;
@@ -220,7 +233,7 @@ rinode(uint inum, struct dinode *ip)
   uint bn;
   struct dinode *dip;
 
-  bn = IBLOCK(inum, sb);
+  bn = IBLOCK(inum, sb[curr_part], mbr.partitions[curr_part].offset);
   rsect(bn, buf);
   dip = ((struct dinode*)buf) + (inum % IPB);
   *ip = *dip;
@@ -265,8 +278,8 @@ balloc(int used)
   for(i = 0; i < used; i++){
     buf[i/8] = buf[i/8] | (0x1 << (i%8));
   }
-  printf("balloc: write bitmap block at sector %d\n", sb.bmapstart);
-  wsect(sb.bmapstart, buf);
+  printf("balloc: write bitmap block at sector %d\n", sb[curr_part].bmapstart);
+  wsect(sb[curr_part].bmapstart, buf);
 }
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
@@ -296,12 +309,12 @@ iappend(uint inum, void *xp, int n)
       if(xint(din.addrs[NDIRECT]) == 0){
         din.addrs[NDIRECT] = xint(freeblock++);
       }
-      rsect(xint(din.addrs[NDIRECT]), (char*)indirect);
+      rsect(xint(mbr.partitions[curr_part].offset + din.addrs[NDIRECT]), (char*)indirect);
       if(indirect[fbn - NDIRECT] == 0){
         indirect[fbn - NDIRECT] = xint(freeblock++);
-        wsect(xint(din.addrs[NDIRECT]), (char*)indirect);
+        wsect(xint(mbr.partitions[curr_part].offset + din.addrs[NDIRECT]), (char*)indirect);
       }
-      x = xint(indirect[fbn-NDIRECT]);
+      x = xint(mbr.partitions[curr_part].offset + indirect[fbn-NDIRECT]);
     }
     n1 = min(n, (fbn + 1) * BSIZE - off);
     rsect(x, buf);

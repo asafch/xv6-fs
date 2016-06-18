@@ -13,6 +13,7 @@ struct file {
 struct inode {
   uint dev;           // Device number
   uint inum;          // Inode number
+  uint part;          // Partition number
   int ref;            // Reference count
   int flags;          // I_BUSY, I_VALID
 
