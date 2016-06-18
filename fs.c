@@ -19,11 +19,47 @@
 #include "fs.h"
 #include "buf.h"
 #include "file.h"
+#include "mbr.h"
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
 static void itrunc(struct inode*);
 struct superblock sb;   // there should be one per dev, but we run with one dev
+struct mbr mbr;
 
+void
+readmbr(int dev, struct mbr *mbr)
+{
+  struct buf *bp;
+  int i;
+  char * yes = "YES";
+  char * no = "NO";
+  char * fat = "FAT";
+  char * inode = "INODE";
+  char * bootable = 0;
+  char * type = 0;
+
+
+  bp = bread(dev, 0);
+  memmove(mbr, bp->data, sizeof(*mbr));
+  for(i=0; i < NPARTITIONS; i++){
+    if((mbr->partitions[i].flags & PART_ALLOCATED) == 1){
+      if((mbr->partitions[i].flags & PART_BOOTABLE) == 1){
+        bootable = yes;
+      }
+      else{
+        bootable = no;
+      }
+      if(mbr->partitions[i].type == FS_INODE){
+        type = inode;
+      }
+      else{
+        type = fat;
+      }
+      cprintf("Partition %d: bootable: %s, type:%s, offset:%d, size:%d \n", i, bootable, type, mbr->partitions[i].offset, mbr->partitions[i].size);
+    }
+  }
+  brelse(bp);
+}
 // Read the super block.
 void
 readsb(int dev, struct superblock *sb)
@@ -166,6 +202,7 @@ iinit(int dev)
   readsb(dev, &sb);
   cprintf("sb: size %d nblocks %d ninodes %d nlog %d logstart %d inodestart %d bmap start %d\n", sb.size,
           sb.nblocks, sb.ninodes, sb.nlog, sb.logstart, sb.inodestart, sb.bmapstart);
+  readmbr(dev,&mbr);
 }
 
 static struct inode* iget(uint dev, uint inum);

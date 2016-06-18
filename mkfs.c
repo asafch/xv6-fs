@@ -10,6 +10,7 @@
 #include "fs.h"
 #include "stat.h"
 #include "param.h"
+#include "mbr.h"
 
 #ifndef static_assert
 #define static_assert(a, b) do { switch (0) case 0: case (a): ; } while (0)
@@ -28,6 +29,7 @@ int nblocks;  // Number of data blocks
 
 int fsfd;
 struct superblock sb;
+struct mbr mbr;
 char zeroes[BSIZE];
 uint freeinode = 1;
 uint freeblock;
@@ -94,6 +96,17 @@ main(int argc, char *argv[])
   nmeta = 2 + nlog + ninodeblocks + nbitmap;
   nblocks = FSSIZE - nmeta;
 
+//make sure no junk is in mbr before setting it
+  memset(&mbr.bootstrap[0],0,sizeof(uchar)*446);
+  memset(&mbr.partitions[0],0,sizeof(struct dpartition)*NPARTITIONS);
+  memset(&mbr.magic[0],0,sizeof(uchar)*2);
+
+  mbr.partitions[0].flags |= PART_ALLOCATED;
+  mbr.partitions[0].type = FS_INODE;
+  mbr.partitions[0].offset = 0;
+  mbr.partitions[0].size = FSSIZE;
+
+
   sb.size = xint(FSSIZE);
   sb.nblocks = xint(nblocks);
   sb.ninodes = xint(NINODES);
@@ -109,6 +122,12 @@ main(int argc, char *argv[])
 
   for(i = 0; i < FSSIZE; i++)
     wsect(i, zeroes);
+
+  //writing MBR to disk
+  memset(buf, 0, sizeof(buf));
+  memmove(buf, &mbr, sizeof(mbr));
+  wsect(0, buf);
+
 
   memset(buf, 0, sizeof(buf));
   memmove(buf, &sb, sizeof(sb));
