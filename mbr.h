@@ -10,7 +10,7 @@
 
 struct dpartition {
 	uint flags;
-	uint type;	
+	uint type;
 	uint offset;
 	uint size;
 };
@@ -24,9 +24,8 @@ struct mbr {
 
 struct partition {
 	uint dev;
-
-	uint flags;	
-	uint type;	
+	uint flags;
+	uint type;
 	uint offset;
 	uint size;
 };

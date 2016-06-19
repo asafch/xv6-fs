@@ -23,16 +23,18 @@
 
 int nbitmap = FSSIZE/(BSIZE*8) + 1;
 int ninodeblocks = NINODES / IPB + 1;
-int nlog = LOGSIZE;  
+int nlog = LOGSIZE;
 int nmeta;    // Number of meta blocks (boot, sb, nlog, inode, bitmap)
 int nblocks;  // Number of data blocks
 
 int fsfd;
-struct superblock sb;
+struct superblock sbs[4];
 struct mbr mbr;
 char zeroes[BSIZE];
 uint freeinode = 1;
 uint freeblock;
+uint master_freeblock;
+int current_partition = 0;
 
 
 void balloc(int);
@@ -74,7 +76,7 @@ main(int argc, char *argv[])
   struct dirent de;
   char buf[BSIZE];
   struct dinode din;
-
+  struct dpartition partitions[4];
 
   static_assert(sizeof(int) == 4, "Integers must be 4 bytes!");
 
@@ -96,29 +98,39 @@ main(int argc, char *argv[])
   nmeta = 2 + nlog + ninodeblocks + nbitmap;
   nblocks = FSSIZE - nmeta;
 
-//make sure no junk is in mbr before setting it
+  //make sure no junk is in mbr before setting it
   memset(&mbr.bootstrap[0],0,sizeof(uchar)*446);
   memset(&mbr.partitions[0],0,sizeof(struct dpartition)*NPARTITIONS);
   memset(&mbr.magic[0],0,sizeof(uchar)*2);
 
+  // allocate partition 0
   mbr.partitions[0].flags |= PART_ALLOCATED;
   mbr.partitions[0].type = FS_INODE;
-  mbr.partitions[0].offset = 0;
+  mbr.partitions[0].offset = 1;
   mbr.partitions[0].size = FSSIZE;
 
+  memset(&partitions, 0, sizeof(struct dpartition) * 4);
+  partitions[0].offset = 1;
+  partitions[1].offset = 1 + FSSIZE;
+  partitions[2].offset = 1 + FSSIZE * 2;
+  partitions[3].offset = 1 + FSSIZE * 3;
 
-  sb.size = xint(FSSIZE);
-  sb.nblocks = xint(nblocks);
-  sb.ninodes = xint(NINODES);
-  sb.nlog = xint(nlog);
-  sb.logstart = xint(2);
-  sb.inodestart = xint(2+nlog);
-  sb.bmapstart = xint(2+nlog+ninodeblocks);
+  // initialize super blocks
+  for (i = 0; i < NPARTITIONS; i++) {
+    sbs[i].size = xint(FSSIZE);
+    sbs[i].nblocks = xint(nblocks);
+    sbs[i].ninodes = xint(NINODES);
+    sbs[i].nlog = xint(nlog);
+    sbs[i].logstart = xint(1);
+    sbs[i].inodestart = xint(1 + nlog);
+    sbs[i].bmapstart = xint(1 + nlog + ninodeblocks);
+  }
 
-  printf("nmeta %d (boot, super, log blocks %u inode blocks %u, bitmap blocks %u) blocks %d total %d\n",
+  printf("Each partition has the following composition: nmeta %d (boot, super, log blocks %u inode blocks %u, bitmap blocks %u) blocks %d total %d\n",
          nmeta, nlog, ninodeblocks, nbitmap, nblocks, FSSIZE);
 
   freeblock = nmeta;     // the first free block that we can allocate
+  master_freeblock = freeblock; // this is to remember the first free block in every partition
 
   for(i = 0; i < FSSIZE; i++)
     wsect(i, zeroes);
@@ -130,8 +142,8 @@ main(int argc, char *argv[])
 
 
   memset(buf, 0, sizeof(buf));
-  memmove(buf, &sb, sizeof(sb));
-  wsect(1, buf);
+  memmove(buf, &sbs[current_partition], sizeof(sbs[current_partition]));
+  wsect(1, buf); //TODO switch to relative, write 4 sbs
 
   rootino = ialloc(T_DIR);
   assert(rootino == ROOTINO);
@@ -153,7 +165,7 @@ main(int argc, char *argv[])
       perror(argv[i]);
       exit(1);
     }
-    
+
     // Skip leading _ in name when writing to file system.
     // The binaries are named _rm, _cat, etc. to keep the
     // build operating system from trying to execute them
@@ -189,7 +201,7 @@ main(int argc, char *argv[])
 void
 wsect(uint sec, void *buf)
 {
-  if(lseek(fsfd, sec * BSIZE, 0) != sec * BSIZE){
+  if(lseek(fsfd, sec * BSIZE + FSSIZE * current_partition, 0) != sec * BSIZE+ FSSIZE * current_partition){
     perror("lseek");
     exit(1);
   }
@@ -206,7 +218,7 @@ winode(uint inum, struct dinode *ip)
   uint bn;
   struct dinode *dip;
 
-  bn = IBLOCK(inum, sb);
+  bn = IBLOCK(inum, sbs[current_partition]);
   rsect(bn, buf);
   dip = ((struct dinode*)buf) + (inum % IPB);
   *dip = *ip;
@@ -220,7 +232,7 @@ rinode(uint inum, struct dinode *ip)
   uint bn;
   struct dinode *dip;
 
-  bn = IBLOCK(inum, sb);
+  bn = IBLOCK(inum, sbs[current_partition]);
   rsect(bn, buf);
   dip = ((struct dinode*)buf) + (inum % IPB);
   *ip = *dip;
@@ -229,7 +241,7 @@ rinode(uint inum, struct dinode *ip)
 void
 rsect(uint sec, void *buf)
 {
-  if(lseek(fsfd, sec * BSIZE, 0) != sec * BSIZE){
+  if(lseek(fsfd, sec * BSIZE + FSSIZE * current_partition, 0) != sec * BSIZE+ FSSIZE * current_partition){
     perror("lseek");
     exit(1);
   }
@@ -265,8 +277,8 @@ balloc(int used)
   for(i = 0; i < used; i++){
     buf[i/8] = buf[i/8] | (0x1 << (i%8));
   }
-  printf("balloc: write bitmap block at sector %d\n", sb.bmapstart);
-  wsect(sb.bmapstart, buf);
+  printf("balloc: write bitmap block at sector %d\n", sbs[current_partition].bmapstart);
+  wsect(sbs[current_partition].bmapstart, buf);
 }
 
 #define min(a, b) ((a) < (b) ? (a) : (b))

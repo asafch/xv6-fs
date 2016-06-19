@@ -5,7 +5,7 @@
 //   + Directories: inode with special contents (list of other inodes!)
 //   + Names: paths like /usr/rtm/xv6/fs.c for convenient naming.
 //
-// This file contains the low-level file system manipulation 
+// This file contains the low-level file system manipulation
 // routines.  The (higher-level) system call implementations
 // are in sysfile.c.
 
@@ -25,6 +25,20 @@
 static void itrunc(struct inode*);
 struct superblock sb;   // there should be one per dev, but we run with one dev
 struct mbr mbr;
+int boot_partition = 0;
+struct superblock sbs[4] = {{0, 0, 0, 0, 0, 0, 0},
+                            {0, 0, 0, 0, 0, 0, 0},
+                            {0, 0, 0, 0, 0, 0, 0},
+                            {0, 0, 0, 0, 0, 0, 0}};
+struct partition partitions[4] = {{0, 0, 0, 0, 0},
+                                  {0, 0, 0, 0, 0},
+                                  {0, 0, 0, 0, 0},
+                                  {0, 0, 0, 0, 0}};
+
+int checkForBootPrograms(int index) {
+  // TODO implement
+  return 0;
+}
 
 void
 readmbr(int dev, struct mbr *mbr)
@@ -45,6 +59,7 @@ readmbr(int dev, struct mbr *mbr)
     if((mbr->partitions[i].flags & PART_ALLOCATED) == 1){
       if((mbr->partitions[i].flags & PART_BOOTABLE) == 1){
         bootable = yes;
+        boot_partition = checkForBootPrograms(i); // mark first bootable partition as boot partition
       }
       else{
         bootable = no;
@@ -56,8 +71,11 @@ readmbr(int dev, struct mbr *mbr)
         type = fat;
       }
       cprintf("Partition %d: bootable: %s, type:%s, offset:%d, size:%d \n", i, bootable, type, mbr->partitions[i].offset, mbr->partitions[i].size);
+      memmove(&partitions[i] + sizeof(uint), &mbr->partitions[i], sizeof(struct dpartition));
+      partitions[i].dev = dev;
     }
   }
+
   brelse(bp);
 }
 // Read the super block.
@@ -65,7 +83,7 @@ void
 readsb(int dev, struct superblock *sb)
 {
   struct buf *bp;
-  
+
   bp = bread(dev, 1);
   memmove(sb, bp->data, sizeof(*sb));
   brelse(bp);
@@ -76,14 +94,14 @@ static void
 bzero(int dev, int bno)
 {
   struct buf *bp;
-  
+
   bp = bread(dev, bno);
   memset(bp->data, 0, BSIZE);
   log_write(bp);
   brelse(bp);
 }
 
-// Blocks. 
+// Blocks.
 
 // Allocate a zeroed disk block.
 static uint
@@ -199,10 +217,10 @@ void
 iinit(int dev)
 {
   initlock(&icache.lock, "icache");
+  readmbr(dev,&mbr);
   readsb(dev, &sb);
   cprintf("sb: size %d nblocks %d ninodes %d nlog %d logstart %d inodestart %d bmap start %d\n", sb.size,
           sb.nblocks, sb.ninodes, sb.nlog, sb.logstart, sb.inodestart, sb.bmapstart);
-  readmbr(dev,&mbr);
 }
 
 static struct inode* iget(uint dev, uint inum);
@@ -385,7 +403,7 @@ iunlockput(struct inode *ip)
 //
 // The content (data) associated with each inode is stored
 // in blocks on the disk. The first NDIRECT block numbers
-// are listed in ip->addrs[].  The next NINDIRECT blocks are 
+// are listed in ip->addrs[].  The next NINDIRECT blocks are
 // listed in block ip->addrs[NDIRECT].
 
 // Return the disk block address of the nth block in inode ip.
@@ -438,7 +456,7 @@ itrunc(struct inode *ip)
       ip->addrs[i] = 0;
     }
   }
-  
+
   if(ip->addrs[NDIRECT]){
     bp = bread(ip->dev, ip->addrs[NDIRECT]);
     a = (uint*)bp->data;
@@ -591,7 +609,7 @@ dirlink(struct inode *dp, char *name, uint inum)
   de.inum = inum;
   if(writei(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
     panic("dirlink");
-  
+
   return 0;
 }
 
