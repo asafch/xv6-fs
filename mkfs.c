@@ -22,7 +22,7 @@
 // Disk layout:
 // [ boot block | sb block | log | inode blocks | free bit map | data blocks ]
 
-int nbitmap = PARTSIZE/(BSIZE*8) + 1;
+int nbitmap = FSSIZE/(BSIZE*8) + 1;
 int ninodeblocks = NINODES / IPB + 1;
 int nlog = LOGSIZE;
 int nmeta;    // Number of meta blocks (boot, sb, nlog, inode, bitmap)
@@ -74,7 +74,7 @@ xint(uint x)
 int
 main(int argc, char *argv[])
 {
-  int i, cc, fd;
+  int i, cc, fd,fd_bootblock,fd_kernel,blocks_for_kernel;
   uint rootino, inum, off;
   struct dirent de;
   char buf[BSIZE];
@@ -89,7 +89,6 @@ main(int argc, char *argv[])
 
   assert((BSIZE % sizeof(struct dinode)) == 0);
   assert((BSIZE % sizeof(struct dirent)) == 0);
-
   fsfd = open(argv[1], O_RDWR|O_CREAT|O_TRUNC, 0666);
   if(fsfd < 0){
     perror(argv[1]);
@@ -98,28 +97,53 @@ main(int argc, char *argv[])
 
   // 1 fs block = 1 disk sector
   nmeta = 1 + nlog + ninodeblocks + nbitmap;
-  nblocks = PARTSIZE - nmeta;
+  nblocks = FSSIZE - nmeta;
 
   //make sure no junk is in mbr before setting it
   memset(&mbr.bootstrap[0],0,sizeof(uchar)*446);
   memset(&mbr.partitions[0],0,sizeof(struct dpartition)*NPARTITIONS);
   memset(&mbr.magic[0],0,sizeof(uchar)*2);
 
+
+  for(i = 0; i < FSSIZE; i++)
+    wsect(i, zeroes, 1); // TODO zero all partitions
+
+    //write kernel to block 1
+  fd_kernel = open(argv[3], O_RDONLY, 0666);
+  memset(buf, 0, sizeof(buf));
+  blocks_for_kernel = 0;
+  while((read(fd_kernel, buf, sizeof(buf))) > 0){
+    blocks_for_kernel++;
+    wsect(blocks_for_kernel,buf,1); // writes to absolute block #block_for_kernel
+  }
+  close(fd_kernel);
+
+  //copy bootblock into mbr bootstart
+  fd_bootblock = open(argv[2], O_RDONLY, 0666);
+  read(fd_bootblock, &mbr.bootstrap[0], sizeof(char)*BOOTSTRAP);
+
+  //set boot signature
+  lseek(fd_bootblock, 510, SEEK_SET);
+  read(fd_bootblock, mbr.magic, 2);
+
+  close(fd_bootblock);
+
+
   // allocate partition 0
   mbr.partitions[0].flags = PART_ALLOCATED | PART_BOOTABLE;
   mbr.partitions[0].type = FS_INODE;
-  mbr.partitions[0].offset = 1;
-  mbr.partitions[0].size = PARTSIZE;
+  mbr.partitions[0].offset = blocks_for_kernel + 1;
+  mbr.partitions[0].size = FSSIZE;
 
   memset(&partitions, 0, sizeof(struct dpartition) * 4);
-  partitions[0].offset = 1;
-  partitions[1].offset = 1 + PARTSIZE;
-  partitions[2].offset = 1 + PARTSIZE * 2;
-  partitions[3].offset = 1 + PARTSIZE * 3;
+  partitions[0].offset = blocks_for_kernel + 1;
+  partitions[1].offset = blocks_for_kernel + 1 + FSSIZE;
+  partitions[2].offset = blocks_for_kernel + 1 + FSSIZE * 2;
+  partitions[3].offset = blocks_for_kernel + 1 + FSSIZE * 3;
 
   // initialize super blocks
   for (i = 0; i < NPARTITIONS; i++) {
-    sbs[i].size = xint(PARTSIZE);
+    sbs[i].size = xint(FSSIZE);
     sbs[i].nblocks = xint(nblocks);
     sbs[i].ninodes = xint(NINODES);
     sbs[i].nlog = xint(nlog);
@@ -128,16 +152,10 @@ main(int argc, char *argv[])
     sbs[i].bmapstart = xint(1 + nlog + ninodeblocks);
     sbs[i].offset = partitions[i].offset;
   }
-
-
-  printf("Each partition has the following composition: nmeta %d (boot, super, log blocks %u inode blocks %u, bitmap blocks %u) blocks %d total %d\n",nmeta, nlog, ninodeblocks, nbitmap, nblocks, PARTSIZE);
+  printf("Each partition has the following composition: nmeta %d (boot, super, log blocks %u inode blocks %u, bitmap blocks %u) blocks %d total %d\n",nmeta, nlog, ninodeblocks, nbitmap, nblocks, FSSIZE);
 
   freeblock = nmeta;     // the first free block that we can allocate
   master_freeblock = freeblock; // this is to remember the first free block in every partition
-
-  for(i = 0; i < FSSIZE; i++)
-    wsect(i, zeroes, 1); // TODO zero all partitions
-
 
   //writing MBR to disk
   memset(buf, 0, sizeof(buf));
@@ -148,6 +166,8 @@ main(int argc, char *argv[])
   memset(buf, 0, sizeof(buf));
   memmove(buf, &sbs[current_partition], sizeof(sbs[current_partition]));
   wsect(0, buf, 0); // writes to relative blcok #0, which is absolute #1 for partition 0
+
+
 
   rootino = ialloc(T_DIR);
   assert(rootino == ROOTINO);
@@ -162,7 +182,7 @@ main(int argc, char *argv[])
   strcpy(de.name, "..");
   iappend(rootino, &de, sizeof(de));
 
-  for(i = 2; i < argc; i++){
+  for(i = 4; i < argc; i++){
     assert(index(argv[i], '/') == 0);
 
     if((fd = open(argv[i], 0)) < 0){
@@ -208,6 +228,7 @@ wsect(uint sec, void *buf, int mbr)
 {
   uint off =  mbr ? 0 : partitions[current_partition].offset;
   if(lseek(fsfd, (off + sec) * BSIZE, 0) != (off + sec) * BSIZE){
+
     perror("lseek");
     exit(1);
   }
@@ -247,12 +268,14 @@ rinode(uint inum, struct dinode *ip)
 void
 rsect(uint sec, void *buf, int mbr)
 {
+  int i = -111;
   uint off =  mbr ? 0 : partitions[current_partition].offset;
   if(lseek(fsfd, (off + sec) * BSIZE, 0) != (off + sec) * BSIZE){
+    
     perror("lseek");
     exit(1);
   }
-  if(read(fsfd, buf, BSIZE) != BSIZE){
+  if((i = read(fsfd, buf, BSIZE)) != BSIZE){
     perror("read");
     exit(1);
   }
