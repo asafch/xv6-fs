@@ -45,7 +45,8 @@ void
 readmbr(int dev, struct mbr *mbr)
 {
   struct buf *bp;
-  int i;
+  int i,first_bootable_partition;
+  int first = 1;
   char * yes = "YES";
   char * no = "NO";
   char * fat = "FAT";
@@ -59,6 +60,10 @@ readmbr(int dev, struct mbr *mbr)
   for (i = 0; i < NPARTITIONS; i++){
     if (mbr->partitions[i].flags & PART_ALLOCATED){
       if (mbr->partitions[i].flags & PART_BOOTABLE){
+        if(first){
+          first_bootable_partition = i;
+          first = 0;
+        }
         bootable = yes;
         boot_partition = checkForBootPrograms(i); // mark first bootable partition as boot partition
       }
@@ -81,6 +86,8 @@ readmbr(int dev, struct mbr *mbr)
       partitions[i].size = mbr->partitions[i].size;
       readsb(dev, &sbs[i]);
     }
+    current_partition = first_bootable_partition;
+    boot_partition = first_bootable_partition;
   }
 
   brelse(bp);
@@ -92,6 +99,8 @@ readsb(int dev, struct superblock *sb)
   struct buf *bp;
   bp = bread(dev, mbr.partitions[current_partition].offset);
   memmove(sb, bp->data, sizeof(*sb));
+  //set offest of sb
+  sb->offset = mbr.partitions[current_partition].offset;
   brelse(bp);
 }
 

@@ -22,7 +22,7 @@
 // Disk layout:
 // [ boot block | sb block | log | inode blocks | free bit map | data blocks ]
 
-int nbitmap = FSSIZE/(BSIZE*8) + 1;
+int nbitmap = PARTSIZE/(BSIZE*8) + 1;
 int ninodeblocks = NINODES / IPB + 1;
 int nlog = LOGSIZE;
 int nmeta;    // Number of meta blocks (boot, sb, nlog, inode, bitmap)
@@ -98,7 +98,7 @@ main(int argc, char *argv[])
 
   // 1 fs block = 1 disk sector
   nmeta = 1 + nlog + ninodeblocks + nbitmap;
-  nblocks = FSSIZE - nmeta;
+  nblocks = PARTSIZE - nmeta;
 
   //make sure no junk is in mbr before setting it
   memset(&mbr.bootstrap[0],0,sizeof(uchar)*446);
@@ -109,17 +109,17 @@ main(int argc, char *argv[])
   mbr.partitions[0].flags = PART_ALLOCATED | PART_BOOTABLE;
   mbr.partitions[0].type = FS_INODE;
   mbr.partitions[0].offset = 1;
-  mbr.partitions[0].size = FSSIZE;
+  mbr.partitions[0].size = PARTSIZE;
 
   memset(&partitions, 0, sizeof(struct dpartition) * 4);
   partitions[0].offset = 1;
-  partitions[1].offset = 1 + FSSIZE;
-  partitions[2].offset = 1 + FSSIZE * 2;
-  partitions[3].offset = 1 + FSSIZE * 3;
+  partitions[1].offset = 1 + PARTSIZE;
+  partitions[2].offset = 1 + PARTSIZE * 2;
+  partitions[3].offset = 1 + PARTSIZE * 3;
 
   // initialize super blocks
   for (i = 0; i < NPARTITIONS; i++) {
-    sbs[i].size = xint(FSSIZE);
+    sbs[i].size = xint(PARTSIZE);
     sbs[i].nblocks = xint(nblocks);
     sbs[i].ninodes = xint(NINODES);
     sbs[i].nlog = xint(nlog);
@@ -130,7 +130,7 @@ main(int argc, char *argv[])
   }
 
 
-  printf("Each partition has the following composition: nmeta %d (boot, super, log blocks %u inode blocks %u, bitmap blocks %u) blocks %d total %d\n",nmeta, nlog, ninodeblocks, nbitmap, nblocks, FSSIZE);
+  printf("Each partition has the following composition: nmeta %d (boot, super, log blocks %u inode blocks %u, bitmap blocks %u) blocks %d total %d\n",nmeta, nlog, ninodeblocks, nbitmap, nblocks, PARTSIZE);
 
   freeblock = nmeta;     // the first free block that we can allocate
   master_freeblock = freeblock; // this is to remember the first free block in every partition
