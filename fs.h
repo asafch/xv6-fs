@@ -1,9 +1,10 @@
-// On-disk file system format. 
+// On-disk file system format.
 // Both the kernel and user programs use this header file.
 
 
 #define ROOTINO 1  // root i-number
 #define BSIZE 512  // block size
+#define OFFSET (FSSIZE * current_partition)
 
 // Disk layout:
 // [ boot block | super block | log | inode blocks | free bit map | data blocks ]
@@ -18,6 +19,7 @@ struct superblock {
   uint logstart;     // Block number of first log block
   uint inodestart;   // Block number of first inode block
   uint bmapstart;    // Block number of first free map block
+  uint offset;       // Absolute offset of the superblock on the disk
 };
 
 #define NDIRECT 12
@@ -38,13 +40,13 @@ struct dinode {
 #define IPB           (BSIZE / sizeof(struct dinode))
 
 // Block containing inode i
-#define IBLOCK(i, sb, part_offset)     ((i) / IPB + sb.inodestart + part_offset)
+#define IBLOCK(i, sb)     ((i) / IPB + sb.inodestart)
 
 // Bitmap bits per block
 #define BPB           (BSIZE*8)
 
 // Block of free map containing bit for block b
-#define BBLOCK(b, sb, part_offset) (b/BPB + sb.bmapstart + part_offset)
+#define BBLOCK(b, sb) (b/BPB + sb.bmapstart)
 
 // Directory is a file containing a sequence of dirent structures.
 #define DIRSIZ 14
@@ -53,4 +55,3 @@ struct dirent {
   ushort inum;
   char name[DIRSIZ];
 };
-

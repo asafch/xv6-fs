@@ -1,3 +1,5 @@
+// #include "mbr.h"
+
 struct file {
   enum { FD_NONE, FD_PIPE, FD_INODE } type;
   int ref; // reference count
@@ -23,6 +25,7 @@ struct inode {
   short nlink;
   uint size;
   uint addrs[NDIRECT+1];
+  struct partition *partitions;
 };
 #define I_BUSY 0x1
 #define I_VALID 0x2

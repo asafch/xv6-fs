@@ -5,7 +5,7 @@
 //   + Directories: inode with special contents (list of other inodes!)
 //   + Names: paths like /usr/rtm/xv6/fs.c for convenient naming.
 //
-// This file contains the low-level file system manipulation 
+// This file contains the low-level file system manipulation
 // routines.  The (higher-level) system call implementations
 // are in sysfile.c.
 
@@ -23,9 +23,23 @@
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
 static void itrunc(struct inode*);
-struct superblock sb;   // there should be one per dev, but we run with one dev
+// struct superblock sb;   // there should be one per dev, but we run with one dev
 struct mbr mbr;
-uint curr_part = 0;
+int boot_partition = 0;
+int current_partition = 0;
+struct superblock sbs[NPARTITIONS] = {{0, 0, 0, 0, 0, 0, 0},
+                            {0, 0, 0, 0, 0, 0, 0},
+                            {0, 0, 0, 0, 0, 0, 0},
+                            {0, 0, 0, 0, 0, 0, 0}};
+struct partition partitions[NPARTITIONS] = {{0, 0, 0, 0, 0},
+                                  {0, 0, 0, 0, 0},
+                                  {0, 0, 0, 0, 0},
+                                  {0, 0, 0, 0, 0}};
+
+int checkForBootPrograms(int index) {
+  // TODO implement
+  return 0;
+}
 
 void
 readmbr(int dev, struct mbr *mbr)
@@ -42,23 +56,33 @@ readmbr(int dev, struct mbr *mbr)
 
   bp = bread(dev, 0);
   memmove(mbr, bp->data, sizeof(*mbr));
-  for(i=0; i < NPARTITIONS; i++){
-    if((mbr->partitions[i].flags & PART_ALLOCATED) == 1){
-      if((mbr->partitions[i].flags & PART_BOOTABLE) == 1){
+  for (i = 0; i < NPARTITIONS; i++){
+    if (mbr->partitions[i].flags & PART_ALLOCATED){
+      if (mbr->partitions[i].flags & PART_BOOTABLE){
         bootable = yes;
+        boot_partition = checkForBootPrograms(i); // mark first bootable partition as boot partition
       }
-      else{
+      else {
         bootable = no;
       }
-      if(mbr->partitions[i].type == FS_INODE){
+      if (mbr->partitions[i].type == FS_INODE) {
         type = inode;
       }
-      else{
+      else {
         type = fat;
       }
       cprintf("Partition %d: bootable: %s, type:%s, offset:%d, size:%d \n", i, bootable, type, mbr->partitions[i].offset, mbr->partitions[i].size);
+      // memmove(&partitions[i] + sizeof(uint), &mbr->partitions[i], sizeof(struct dpartition));
+      current_partition = i;
+      partitions[i].dev = dev;
+      partitions[i].flags = mbr->partitions[i].flags;
+      partitions[i].type = mbr->partitions[i].type;
+      partitions[i].offset = mbr->partitions[i].offset;
+      partitions[i].size = mbr->partitions[i].size;
+      readsb(dev, &sbs[i]);
     }
   }
+
   brelse(bp);
 }
 // Read the super block.
@@ -66,8 +90,7 @@ void
 readsb(int dev, struct superblock *sb)
 {
   struct buf *bp;
-  
-  bp = bread(dev, mbr.partitions[curr_part].offset );
+  bp = bread(dev, mbr.partitions[current_partition].offset);
   memmove(sb, bp->data, sizeof(*sb));
   brelse(bp);
 }
@@ -77,14 +100,14 @@ static void
 bzero(int dev, int bno)
 {
   struct buf *bp;
-  
-  bp = bread(dev, bno);
+
+  bp = bread(dev, bno + partitions[current_partition].offset);
   memset(bp->data, 0, BSIZE);
   log_write(bp);
   brelse(bp);
 }
 
-// Blocks. 
+// Blocks.
 
 // Allocate a zeroed disk block.
 static uint
@@ -94,9 +117,9 @@ balloc(uint dev)
   struct buf *bp;
 
   bp = 0;
-  for(b = 0; b < sb.size; b += BPB){
-    bp = bread(dev, BBLOCK(b, sb, mbr.partitions[curr_part].offset));
-    for(bi = 0; bi < BPB && b + bi < sb.size; bi++){
+  for(b = 0; b < sbs[current_partition].size; b += BPB){
+    bp = bread(dev, BBLOCK(b, sbs[current_partition]) + partitions[current_partition].offset);
+    for(bi = 0; bi < BPB && b + bi < sbs[current_partition].size; bi++){
       m = 1 << (bi % 8);
       if((bp->data[bi/8] & m) == 0){  // Is block free?
         bp->data[bi/8] |= m;  // Mark block in use.
@@ -117,9 +140,8 @@ bfree(int dev, uint b)
 {
   struct buf *bp;
   int bi, m;
-
-  readsb(dev, &sb);
-  bp = bread(dev, BBLOCK(b, sb, mbr.partitions[curr_part].offset));
+  readsb(dev, &sbs[current_partition]);  // seems unnecessary
+  bp = bread(dev, BBLOCK(b, sbs[current_partition]) + partitions[current_partition].offset);
   bi = b % BPB;
   m = 1 << (bi % 8);
   if((bp->data[bi/8] & m) == 0)
@@ -200,11 +222,10 @@ void
 iinit(int dev)
 {
   initlock(&icache.lock, "icache");
-  readmbr(dev,&mbr);
-  readsb(dev, &sb);
-  cprintf("sb: size %d nblocks %d ninodes %d nlog %d logstart %d inodestart %d bmap start %d\n", sb.size,
-          sb.nblocks, sb.ninodes, sb.nlog, sb.logstart, sb.inodestart, sb.bmapstart);
-  
+  readmbr(dev, &mbr);
+  // readsb(dev, &sbs[0]);
+  cprintf("Boot partition: size %d nblocks %d ninodes %d nlog %d logstart %d inodestart %d bmap start %d\n", sbs[boot_partition].size,
+          sbs[boot_partition].nblocks, sbs[boot_partition].ninodes, sbs[current_partition].nlog, sbs[boot_partition].logstart, sbs[boot_partition].inodestart, sbs[boot_partition].bmapstart);
 }
 
 static struct inode* iget(uint dev, uint inum);
@@ -218,9 +239,8 @@ ialloc(uint dev, short type)
   int inum;
   struct buf *bp;
   struct dinode *dip;
-
-  for(inum = 1; inum < sb.ninodes; inum++){
-    bp = bread(dev, IBLOCK(inum, sb, mbr.partitions[curr_part].offset));
+  for(inum = 1; inum < sbs[current_partition].ninodes; inum++){
+    bp = bread(dev, IBLOCK(inum, sbs[current_partition]) + partitions[current_partition].offset);
     dip = (struct dinode*)bp->data + inum%IPB;
     if(dip->type == 0){  // a free inode
       memset(dip, 0, sizeof(*dip));
@@ -241,7 +261,8 @@ iupdate(struct inode *ip)
   struct buf *bp;
   struct dinode *dip;
 
-  bp = bread(ip->dev, IBLOCK(ip->inum, sb,mbr.partitions[curr_part].offset));
+
+  bp = bread(ip->dev, IBLOCK(ip->inum, sbs[current_partition]) + partitions[current_partition].offset);
   dip = (struct dinode*)bp->data + ip->inum%IPB;
   dip->type = ip->type;
   dip->major = ip->major;
@@ -280,11 +301,12 @@ iget(uint dev, uint inum)
     panic("iget: no inodes");
 
   ip = empty;
-  ip->part = curr_part;
+  ip->part = current_partition;
   ip->dev = dev;
   ip->inum = inum;
   ip->ref = 1;
   ip->flags = 0;
+  ip->partitions = partitions;
   release(&icache.lock);
 
   return ip;
@@ -319,13 +341,14 @@ ilock(struct inode *ip)
   release(&icache.lock);
 
   if(!(ip->flags & I_VALID)){
-    bp = bread(ip->dev, IBLOCK(ip->inum, sb,mbr.partitions[curr_part].offset));
+    bp = bread(ip->dev, IBLOCK(ip->inum, sbs[current_partition]) + partitions[current_partition].offset);
     dip = (struct dinode*)bp->data + ip->inum%IPB;
     ip->type = dip->type;
     ip->major = dip->major;
     ip->minor = dip->minor;
     ip->nlink = dip->nlink;
     ip->size = dip->size;
+    ip->partitions = partitions;
     memmove(ip->addrs, dip->addrs, sizeof(ip->addrs));
     brelse(bp);
     ip->flags |= I_VALID;
@@ -388,7 +411,7 @@ iunlockput(struct inode *ip)
 //
 // The content (data) associated with each inode is stored
 // in blocks on the disk. The first NDIRECT block numbers
-// are listed in ip->addrs[].  The next NINDIRECT blocks are 
+// are listed in ip->addrs[].  The next NINDIRECT blocks are
 // listed in block ip->addrs[NDIRECT].
 
 // Return the disk block address of the nth block in inode ip.
@@ -409,8 +432,9 @@ bmap(struct inode *ip, uint bn)
   if(bn < NINDIRECT){
     // Load indirect block, allocating if necessary.
     if((addr = ip->addrs[NDIRECT]) == 0)
+      // NOTE during testing, check if balloc returns a relative block number
       ip->addrs[NDIRECT] = addr = balloc(ip->dev);
-    bp = bread(ip->dev, addr);
+    bp = bread(ip->dev, addr + partitions[current_partition].offset);
     a = (uint*)bp->data;
     if((addr = a[bn]) == 0){
       a[bn] = addr = balloc(ip->dev);
@@ -441,9 +465,9 @@ itrunc(struct inode *ip)
       ip->addrs[i] = 0;
     }
   }
-  
+
   if(ip->addrs[NDIRECT]){
-    bp = bread(ip->dev, ip->addrs[NDIRECT]);
+    bp = bread(ip->dev, ip->addrs[NDIRECT] + partitions[current_partition].offset);
     a = (uint*)bp->data;
     for(j = 0; j < NINDIRECT; j++){
       if(a[j])
@@ -489,7 +513,7 @@ readi(struct inode *ip, char *dst, uint off, uint n)
     n = ip->size - off;
 
   for(tot=0; tot<n; tot+=m, off+=m, dst+=m){
-    bp = bread(ip->dev, bmap(ip, off/BSIZE));
+    bp = bread(ip->dev, bmap(ip, off/BSIZE) + partitions[current_partition].offset);
     m = min(n - tot, BSIZE - off%BSIZE);
     memmove(dst, bp->data + off%BSIZE, m);
     brelse(bp);
@@ -517,7 +541,7 @@ writei(struct inode *ip, char *src, uint off, uint n)
     return -1;
 
   for(tot=0; tot<n; tot+=m, off+=m, src+=m){
-    bp = bread(ip->dev, bmap(ip, off/BSIZE));
+    bp = bread(ip->dev, bmap(ip, off/BSIZE) + partitions[current_partition].offset);
     m = min(n - tot, BSIZE - off%BSIZE);
     memmove(bp->data + off%BSIZE, src, m);
     log_write(bp);
@@ -594,7 +618,7 @@ dirlink(struct inode *dp, char *name, uint inum)
   de.inum = inum;
   if(writei(dp, (char*)&de, off, sizeof(de)) != sizeof(de))
     panic("dirlink");
-  
+
   return 0;
 }
 
