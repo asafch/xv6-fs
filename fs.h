@@ -1,9 +1,10 @@
-// On-disk file system format. 
+// On-disk file system format.
 // Both the kernel and user programs use this header file.
 
 
 #define ROOTINO 1  // root i-number
 #define BSIZE 512  // block size
+#define OFFSET (FSSIZE * current_partition)
 
 // Disk layout:
 // [ boot block | super block | log | inode blocks | free bit map | data blocks ]
@@ -18,6 +19,7 @@ struct superblock {
   uint logstart;     // Block number of first log block
   uint inodestart;   // Block number of first inode block
   uint bmapstart;    // Block number of first free map block
+  uint offset;       // Absolute offset of the superblock on the disk
 };
 
 #define NDIRECT 12
@@ -53,4 +55,3 @@ struct dirent {
   ushort inum;
   char name[DIRSIZ];
 };
-

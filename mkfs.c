@@ -35,13 +35,14 @@ uint freeinode = 1;
 uint freeblock;
 uint master_freeblock;
 int current_partition = 0;
+struct dpartition partitions[4];
 
 
 void balloc(int);
-void wsect(uint, void*);
+void wsect(uint, void*, int);
 void winode(uint, struct dinode*);
 void rinode(uint inum, struct dinode *ip);
-void rsect(uint sec, void *buf);
+void rsect(uint sec, void *buf, int);
 uint ialloc(ushort type);
 void iappend(uint inum, void *p, int n);
 
@@ -76,7 +77,6 @@ main(int argc, char *argv[])
   struct dirent de;
   char buf[BSIZE];
   struct dinode din;
-  struct dpartition partitions[4];
 
   static_assert(sizeof(int) == 4, "Integers must be 4 bytes!");
 
@@ -95,7 +95,7 @@ main(int argc, char *argv[])
   }
 
   // 1 fs block = 1 disk sector
-  nmeta = 2 + nlog + ninodeblocks + nbitmap;
+  nmeta = 1 + nlog + ninodeblocks + nbitmap;
   nblocks = FSSIZE - nmeta;
 
   //make sure no junk is in mbr before setting it
@@ -104,7 +104,7 @@ main(int argc, char *argv[])
   memset(&mbr.magic[0],0,sizeof(uchar)*2);
 
   // allocate partition 0
-  mbr.partitions[0].flags |= PART_ALLOCATED;
+  mbr.partitions[0].flags = PART_ALLOCATED | PART_BOOTABLE;
   mbr.partitions[0].type = FS_INODE;
   mbr.partitions[0].offset = 1;
   mbr.partitions[0].size = FSSIZE;
@@ -124,6 +124,7 @@ main(int argc, char *argv[])
     sbs[i].logstart = xint(1);
     sbs[i].inodestart = xint(1 + nlog);
     sbs[i].bmapstart = xint(1 + nlog + ninodeblocks);
+    sbs[i].offset = partitions[i].offset;
   }
 
   printf("Each partition has the following composition: nmeta %d (boot, super, log blocks %u inode blocks %u, bitmap blocks %u) blocks %d total %d\n",
@@ -133,17 +134,17 @@ main(int argc, char *argv[])
   master_freeblock = freeblock; // this is to remember the first free block in every partition
 
   for(i = 0; i < FSSIZE; i++)
-    wsect(i, zeroes);
+    wsect(i, zeroes, 1); // TODO zero all partitions
 
   //writing MBR to disk
   memset(buf, 0, sizeof(buf));
   memmove(buf, &mbr, sizeof(mbr));
-  wsect(0, buf);
+  wsect(0, buf, 1); // writes to absolute block #0
 
 
   memset(buf, 0, sizeof(buf));
   memmove(buf, &sbs[current_partition], sizeof(sbs[current_partition]));
-  wsect(1, buf); //TODO switch to relative, write 4 sbs
+  wsect(0, buf, 0); // writes to relative blcok #0, which is absolute #1 for partition 0
 
   rootino = ialloc(T_DIR);
   assert(rootino == ROOTINO);
@@ -199,9 +200,10 @@ main(int argc, char *argv[])
 }
 
 void
-wsect(uint sec, void *buf)
+wsect(uint sec, void *buf, int mbr)
 {
-  if(lseek(fsfd, sec * BSIZE + FSSIZE * current_partition, 0) != sec * BSIZE+ FSSIZE * current_partition){
+  uint off =  mbr ? 0 : partitions[current_partition].offset;
+  if(lseek(fsfd, (off + sec) * BSIZE, 0) != (off + sec) * BSIZE){
     perror("lseek");
     exit(1);
   }
@@ -219,10 +221,10 @@ winode(uint inum, struct dinode *ip)
   struct dinode *dip;
 
   bn = IBLOCK(inum, sbs[current_partition]);
-  rsect(bn, buf);
+  rsect(bn, buf, 0);
   dip = ((struct dinode*)buf) + (inum % IPB);
   *dip = *ip;
-  wsect(bn, buf);
+  wsect(bn, buf, 0);
 }
 
 void
@@ -233,15 +235,16 @@ rinode(uint inum, struct dinode *ip)
   struct dinode *dip;
 
   bn = IBLOCK(inum, sbs[current_partition]);
-  rsect(bn, buf);
+  rsect(bn, buf, 0);
   dip = ((struct dinode*)buf) + (inum % IPB);
   *ip = *dip;
 }
 
 void
-rsect(uint sec, void *buf)
+rsect(uint sec, void *buf, int mbr)
 {
-  if(lseek(fsfd, sec * BSIZE + FSSIZE * current_partition, 0) != sec * BSIZE+ FSSIZE * current_partition){
+  uint off =  mbr ? 0 : partitions[current_partition].offset;
+  if(lseek(fsfd, (off + sec) * BSIZE, 0) != (off + sec) * BSIZE){
     perror("lseek");
     exit(1);
   }
@@ -277,8 +280,8 @@ balloc(int used)
   for(i = 0; i < used; i++){
     buf[i/8] = buf[i/8] | (0x1 << (i%8));
   }
-  printf("balloc: write bitmap block at sector %d\n", sbs[current_partition].bmapstart);
-  wsect(sbs[current_partition].bmapstart, buf);
+  printf("balloc: write bitmap block at sector %d\n", sbs[current_partition].bmapstart + sbs[current_partition].offset + 1);
+  wsect(sbs[current_partition].bmapstart, buf, 0);
 }
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
@@ -308,17 +311,17 @@ iappend(uint inum, void *xp, int n)
       if(xint(din.addrs[NDIRECT]) == 0){
         din.addrs[NDIRECT] = xint(freeblock++);
       }
-      rsect(xint(din.addrs[NDIRECT]), (char*)indirect);
+      rsect(xint(din.addrs[NDIRECT]), (char*)indirect, 0);
       if(indirect[fbn - NDIRECT] == 0){
         indirect[fbn - NDIRECT] = xint(freeblock++);
-        wsect(xint(din.addrs[NDIRECT]), (char*)indirect);
+        wsect(xint(din.addrs[NDIRECT]), (char*)indirect, 0);
       }
       x = xint(indirect[fbn-NDIRECT]);
     }
     n1 = min(n, (fbn + 1) * BSIZE - off);
-    rsect(x, buf);
+    rsect(x, buf, 0);
     bcopy(p, buf + off - (fbn * BSIZE), n1);
-    wsect(x, buf);
+    wsect(x, buf, 0);
     n -= n1;
     off += n1;
     p += n1;
