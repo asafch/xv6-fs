@@ -34,7 +34,6 @@ struct mbr mbr;
 char zeroes[BSIZE];
 uint freeinode = 1;
 uint freeblock;
-uint master_freeblock;
 int current_partition = 0;
 struct dpartition partitions[4];
 
@@ -74,7 +73,7 @@ xint(uint x)
 int
 main(int argc, char *argv[])
 {
-  int i, j, cc, fd,fd_bootblock,fd_kernel,blocks_for_kernel;
+  int i, cc, fd,fd_bootblock,fd_kernel,blocks_for_kernel;
   uint rootino, inum, off;
   struct dirent de;
   char buf[BSIZE];
@@ -102,9 +101,8 @@ main(int argc, char *argv[])
   //make sure no junk is in mbr before setting it
   memset(&mbr, 0, sizeof(mbr));
 
-
-  for(i = 0; i < NPARTITIONS * FSSIZE; i++)
-    wsect(i, zeroes, 1); // TODO zero all partitions
+  for(i = 0; i < 2; i++)
+    wsect(i, zeroes, 1);
 
 
     //write kernel to block 1
@@ -150,17 +148,17 @@ main(int argc, char *argv[])
   printf("Each partition has the following composition: nmeta %d (boot, super, log blocks %u inode blocks %u, bitmap blocks %u) blocks %d total %d\n",nmeta, nlog, ninodeblocks, nbitmap, nblocks, FSSIZE);
 
   freeblock = nmeta;     // the first free block that we can allocate
-  master_freeblock = freeblock; // this is to remember the first free block in every partition
 
   //writing MBR to disk
   memset(buf, 0, sizeof(buf));
   memmove(buf, &mbr, sizeof(mbr));
   wsect(0, buf, 1); // writes to absolute block #0
 
-  // write zeroes
-  for(i = 0; i < FSSIZE * NPARTITIONS; i++){
-      wsect(i + blocks_for_kernel + 1, zeroes, 1);
-  }
+
+  // allocate partitions
+  for(i = 0; i < FSSIZE * NPARTITIONS; i++)
+    wsect(i + 1 + blocks_for_kernel, zeroes, 1);
+
   //writing super blocks to disk
   for (i = 0; i < NPARTITIONS; i++) {
     memset(buf, 0, sizeof(buf));
@@ -170,10 +168,11 @@ main(int argc, char *argv[])
   }
   current_partition = 0;
 
-  for (j = 0; j < NPARTITIONS; j++, freeinode = 1, current_partition++) {
+  // allocate inode for root directory in each partition
+  for (i = 0; i < NPARTITIONS; i++, current_partition++, freeinode = 1) {
     rootino = ialloc(T_DIR);
     assert(rootino == ROOTINO);
-    
+
     bzero(&de, sizeof(de));
     de.inum = xshort(rootino);
     strcpy(de.name, ".");
@@ -183,34 +182,13 @@ main(int argc, char *argv[])
     de.inum = xshort(rootino);
     strcpy(de.name, "..");
     iappend(rootino, &de, sizeof(de));
+  }
+  current_partition = 0;
+  freeinode = 4;
 
-    for(i = 4; i < argc && j == 0; i++){
-      assert(index(argv[i], '/') == 0);
-
-      if((fd = open(argv[i], 0)) < 0){
-        perror(argv[i]);
-        exit(1);
-      }
-      // Skip leading _ in name when writing to file system.
-      // The binaries are named _rm, _cat, etc. to keep the
-      // build operating system from trying to execute them
-      // in place of system binaries like rm and cat.
-      if(argv[i][0] == '_'){
-        ++argv[i];
-      }
-
-      inum = ialloc(T_FILE);
-
-      bzero(&de, sizeof(de));
-      de.inum = xshort(inum);
-      strncpy(de.name, argv[i], DIRSIZ);
-      iappend(rootino, &de, sizeof(de));
-
-      while((cc = read(fd, buf, sizeof(buf))) > 0)
-        iappend(inum, buf, cc);
-
-      close(fd);
-    }
+  // populate the blocks bitmap for partitions 1-3
+  for (i = 1; i < NPARTITIONS; i++) {
+    current_partition = i;
     // fix size of root inode dir
     rinode(rootino, &din);
     off = xint(din.size);
@@ -219,8 +197,38 @@ main(int argc, char *argv[])
     winode(rootino, &din);
 
     balloc(freeblock);
-   }
+  }
   current_partition = 0;
+
+  for(i = 4; i < argc; i++){
+    assert(index(argv[i], '/') == 0);
+    if((fd = open(argv[i], 0)) < 0){
+      perror(argv[i]);
+      exit(1);
+    }
+    // Skip leading _ in name when writing to file system.
+    // The binaries are named _rm, _cat, etc. to keep the
+    // build operating system from trying to execute them
+    // in place of system binaries like rm and cat.
+    if(argv[i][0] == '_'){
+      ++argv[i];
+    }
+    inum = ialloc(T_FILE);
+    bzero(&de, sizeof(de));
+    de.inum = xshort(inum);
+    strncpy(de.name, argv[i], DIRSIZ);
+    iappend(rootino, &de, sizeof(de));
+    while((cc = read(fd, buf, sizeof(buf))) > 0)
+      iappend(inum, buf, cc);
+    close(fd);
+  }
+
+  rinode(rootino, &din);
+  off = xint(din.size);
+  off = ((off/BSIZE) + 1) * BSIZE;
+  din.size = xint(off);
+  winode(rootino, &din);
+  balloc(freeblock);
 
   exit(0);
 }
@@ -307,8 +315,9 @@ balloc(int used)
   for(i = 0; i < used; i++){
     buf[i/8] = buf[i/8] | (0x1 << (i%8));
   }
-  printf("balloc: write bitmap block at sector %d\n", sbs[current_partition].bmapstart + sbs[current_partition].offset + 1);
-  wsect(sbs[current_partition].bmapstart + sbs[current_partition].offset + 1 , buf, 0);
+
+  printf("balloc: write bitmap block at partition %d, sector %d\n", current_partition , sbs[current_partition].bmapstart + sbs[current_partition].offset + 1);
+  wsect(sbs[current_partition].bmapstart, buf, 0);
 }
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
