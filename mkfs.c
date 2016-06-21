@@ -74,7 +74,7 @@ xint(uint x)
 int
 main(int argc, char *argv[])
 {
-  int i, cc, fd,fd_bootblock,fd_kernel,blocks_for_kernel;
+  int i, j, cc, fd,fd_bootblock,fd_kernel,blocks_for_kernel;
   uint rootino, inum, off;
   struct dirent de;
   char buf[BSIZE];
@@ -158,9 +158,9 @@ main(int argc, char *argv[])
   wsect(0, buf, 1); // writes to absolute block #0
 
   // write zeroes
-  for(i = 0; i < FSSIZE * NPARTITIONS; i++)
-    wsect(i + blocks_for_kernel + 1, zeroes, 1);
-
+  for(i = 0; i < FSSIZE * NPARTITIONS; i++){
+      wsect(i + blocks_for_kernel + 1, zeroes, 1);
+  }
   //writing super blocks to disk
   for (i = 0; i < NPARTITIONS; i++) {
     memset(buf, 0, sizeof(buf));
@@ -170,7 +170,7 @@ main(int argc, char *argv[])
   }
   current_partition = 0;
 
-  for (i = 0; i < NPARTITIONS; i++, freeinode = 1, current_partition++) {
+  for (j = 0; j < NPARTITIONS; j++, freeinode = 1, current_partition++) {
     rootino = ialloc(T_DIR);
     assert(rootino == ROOTINO);
     
@@ -183,45 +183,44 @@ main(int argc, char *argv[])
     de.inum = xshort(rootino);
     strcpy(de.name, "..");
     iappend(rootino, &de, sizeof(de));
-  }
+
+    for(i = 4; i < argc && j == 0; i++){
+      assert(index(argv[i], '/') == 0);
+
+      if((fd = open(argv[i], 0)) < 0){
+        perror(argv[i]);
+        exit(1);
+      }
+      // Skip leading _ in name when writing to file system.
+      // The binaries are named _rm, _cat, etc. to keep the
+      // build operating system from trying to execute them
+      // in place of system binaries like rm and cat.
+      if(argv[i][0] == '_'){
+        ++argv[i];
+      }
+
+      inum = ialloc(T_FILE);
+
+      bzero(&de, sizeof(de));
+      de.inum = xshort(inum);
+      strncpy(de.name, argv[i], DIRSIZ);
+      iappend(rootino, &de, sizeof(de));
+
+      while((cc = read(fd, buf, sizeof(buf))) > 0)
+        iappend(inum, buf, cc);
+
+      close(fd);
+    }
+    // fix size of root inode dir
+    rinode(rootino, &din);
+    off = xint(din.size);
+    off = ((off/BSIZE) + 1) * BSIZE;
+    din.size = xint(off);
+    winode(rootino, &din);
+
+    balloc(freeblock);
+   }
   current_partition = 0;
-
-  for(i = 4; i < argc; i++){
-    assert(index(argv[i], '/') == 0);
-
-    if((fd = open(argv[i], 0)) < 0){
-      perror(argv[i]);
-      exit(1);
-    }
-
-    // Skip leading _ in name when writing to file system.
-    // The binaries are named _rm, _cat, etc. to keep the
-    // build operating system from trying to execute them
-    // in place of system binaries like rm and cat.
-    if(argv[i][0] == '_'){
-      ++argv[i];
-    }
-
-    inum = ialloc(T_FILE);
-
-    bzero(&de, sizeof(de));
-    de.inum = xshort(inum);
-    strncpy(de.name, argv[i], DIRSIZ);
-    iappend(rootino, &de, sizeof(de));
-
-    while((cc = read(fd, buf, sizeof(buf))) > 0)
-      iappend(inum, buf, cc);
-
-    close(fd);
-  }
-  // fix size of root inode dir
-  rinode(rootino, &din);
-  off = xint(din.size);
-  off = ((off/BSIZE) + 1) * BSIZE;
-  din.size = xint(off);
-  winode(rootino, &din);
-
-  balloc(freeblock);
 
   exit(0);
 }
@@ -309,7 +308,7 @@ balloc(int used)
     buf[i/8] = buf[i/8] | (0x1 << (i%8));
   }
   printf("balloc: write bitmap block at sector %d\n", sbs[current_partition].bmapstart + sbs[current_partition].offset + 1);
-  wsect(sbs[current_partition].bmapstart, buf, 0);
+  wsect(sbs[current_partition].bmapstart + sbs[current_partition].offset + 1 , buf, 0);
 }
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
