@@ -157,6 +157,10 @@ main(int argc, char *argv[])
   memmove(buf, &mbr, sizeof(mbr));
   wsect(0, buf, 1); // writes to absolute block #0
 
+  // write zeroes
+  for(i = 0; i < FSSIZE * NPARTITIONS; i++)
+    wsect(i + blocks_for_kernel + 1, zeroes, 1);
+
   //writing super blocks to disk
   for (i = 0; i < NPARTITIONS; i++) {
     memset(buf, 0, sizeof(buf));
@@ -166,18 +170,21 @@ main(int argc, char *argv[])
   }
   current_partition = 0;
 
-  rootino = ialloc(T_DIR);
-  assert(rootino == ROOTINO);
+  for (i = 0; i < NPARTITIONS; i++, freeinode = 1, current_partition++) {
+    rootino = ialloc(T_DIR);
+    assert(rootino == ROOTINO);
+    
+    bzero(&de, sizeof(de));
+    de.inum = xshort(rootino);
+    strcpy(de.name, ".");
+    iappend(rootino, &de, sizeof(de));
 
-  bzero(&de, sizeof(de));
-  de.inum = xshort(rootino);
-  strcpy(de.name, ".");
-  iappend(rootino, &de, sizeof(de));
-
-  bzero(&de, sizeof(de));
-  de.inum = xshort(rootino);
-  strcpy(de.name, "..");
-  iappend(rootino, &de, sizeof(de));
+    bzero(&de, sizeof(de));
+    de.inum = xshort(rootino);
+    strcpy(de.name, "..");
+    iappend(rootino, &de, sizeof(de));
+  }
+  current_partition = 0;
 
   for(i = 4; i < argc; i++){
     assert(index(argv[i], '/') == 0);
@@ -224,7 +231,6 @@ wsect(uint sec, void *buf, int mbr)
 {
   uint off =  mbr ? 0 : partitions[current_partition].offset;
   if(lseek(fsfd, (off + sec) * BSIZE, 0) != (off + sec) * BSIZE){
-
     perror("lseek");
     exit(1);
   }
@@ -267,7 +273,6 @@ rsect(uint sec, void *buf, int mbr)
   int i = -111;
   uint off =  mbr ? 0 : partitions[current_partition].offset;
   if(lseek(fsfd, (off + sec) * BSIZE, 0) != (off + sec) * BSIZE){
-
     perror("lseek");
     exit(1);
   }
