@@ -100,13 +100,12 @@ main(int argc, char *argv[])
   nblocks = FSSIZE - nmeta;
 
   //make sure no junk is in mbr before setting it
-  memset(&mbr.bootstrap[0],0,sizeof(uchar)*446);
-  memset(&mbr.partitions[0],0,sizeof(struct dpartition)*NPARTITIONS);
-  memset(&mbr.magic[0],0,sizeof(uchar)*2);
+  memset(&mbr, 0, sizeof(mbr));
 
 
   for(i = 0; i < NPARTITIONS * FSSIZE; i++)
     wsect(i, zeroes, 1); // TODO zero all partitions
+
 
     //write kernel to block 1
   fd_kernel = open(argv[3], O_RDONLY, 0666);
@@ -120,26 +119,22 @@ main(int argc, char *argv[])
 
   //copy bootblock into mbr bootstart
   fd_bootblock = open(argv[2], O_RDONLY, 0666);
-  read(fd_bootblock, &mbr.bootstrap[0], sizeof(char)*BOOTSTRAP);
+  read(fd_bootblock, &mbr.bootstrap[0], sizeof(mbr.bootstrap));
 
   //set boot signature
-  lseek(fd_bootblock, 510, SEEK_SET);
-  read(fd_bootblock, mbr.magic, 2);
-
+  lseek(fd_bootblock, sizeof(mbr) - sizeof(mbr.magic), SEEK_SET);
+  read(fd_bootblock, mbr.magic, sizeof(mbr.magic));
   close(fd_bootblock);
 
-
-  // allocate partition 0
-  mbr.partitions[0].flags = PART_ALLOCATED | PART_BOOTABLE;
-  mbr.partitions[0].type = FS_INODE;
-  mbr.partitions[0].offset = blocks_for_kernel + 1;
-  mbr.partitions[0].size = FSSIZE;
-
+  // allocate partitions
   memset(&partitions, 0, sizeof(struct dpartition) * 4);
-  partitions[0].offset = blocks_for_kernel + 1;
-  partitions[1].offset = blocks_for_kernel + 1 + FSSIZE;
-  partitions[2].offset = blocks_for_kernel + 1 + FSSIZE * 2;
-  partitions[3].offset = blocks_for_kernel + 1 + FSSIZE * 3;
+  for (i = 0; i < NPARTITIONS; i++) {
+    mbr.partitions[i].flags = i == 0 ? PART_ALLOCATED | PART_BOOTABLE : PART_ALLOCATED;
+    mbr.partitions[i].type = FS_INODE;
+    mbr.partitions[i].offset = i == 0 ? blocks_for_kernel + 1 : mbr.partitions[i-1].offset + mbr.partitions[i-1].size;
+    mbr.partitions[i].size = FSSIZE;
+    partitions[i].offset = mbr.partitions[i].offset;
+  }
 
   // initialize super blocks
   for (i = 0; i < NPARTITIONS; i++) {
@@ -162,12 +157,14 @@ main(int argc, char *argv[])
   memmove(buf, &mbr, sizeof(mbr));
   wsect(0, buf, 1); // writes to absolute block #0
 
-  //writing sb to disk
-  memset(buf, 0, sizeof(buf));
-  memmove(buf, &sbs[current_partition], sizeof(sbs[current_partition]));
-  wsect(0, buf, 0); // writes to relative blcok #0, which is absolute #1 for partition 0
-
-
+  //writing super blocks to disk
+  for (i = 0; i < NPARTITIONS; i++) {
+    memset(buf, 0, sizeof(buf));
+    memmove(buf, &sbs[i], sizeof(sbs[i]));
+    current_partition = i;
+    wsect(0, buf, 0);
+  }
+  current_partition = 0;
 
   rootino = ialloc(T_DIR);
   assert(rootino == ROOTINO);
@@ -197,7 +194,6 @@ main(int argc, char *argv[])
     if(argv[i][0] == '_'){
       ++argv[i];
     }
-      
 
     inum = ialloc(T_FILE);
 
@@ -271,7 +267,7 @@ rsect(uint sec, void *buf, int mbr)
   int i = -111;
   uint off =  mbr ? 0 : partitions[current_partition].offset;
   if(lseek(fsfd, (off + sec) * BSIZE, 0) != (off + sec) * BSIZE){
-    
+
     perror("lseek");
     exit(1);
   }
