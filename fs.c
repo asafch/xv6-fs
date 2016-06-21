@@ -25,7 +25,7 @@
 static void itrunc(struct inode*);
 // struct superblock sb;   // there should be one per dev, but we run with one dev
 struct mbr mbr;
-int boot_partition = 0;
+int boot_partition = -1;
 int current_partition = 0;
 struct superblock sbs[NPARTITIONS] = {{0, 0, 0, 0, 0, 0, 0},
                             {0, 0, 0, 0, 0, 0, 0},
@@ -38,15 +38,14 @@ struct partition partitions[NPARTITIONS] = {{0, 0, 0, 0, 0},
 
 int checkForBootPrograms(int index) {
   // TODO implement
-  return 0;
+  return boot_partition == -1 ? 0 : boot_partition;
 }
 
 void
 readmbr(int dev, struct mbr *mbr)
 {
   struct buf *bp;
-  int i,first_bootable_partition;
-  int first = 1;
+  int i;
   char * yes = "YES";
   char * no = "NO";
   char * fat = "FAT";
@@ -60,10 +59,6 @@ readmbr(int dev, struct mbr *mbr)
   for (i = 0; i < NPARTITIONS; i++){
     if (mbr->partitions[i].flags & PART_ALLOCATED){
       if (mbr->partitions[i].flags & PART_BOOTABLE){
-        if(first){
-          first_bootable_partition = i;
-          first = 0;
-        }
         bootable = yes;
         boot_partition = checkForBootPrograms(i); // mark first bootable partition as boot partition
       }
@@ -86,10 +81,8 @@ readmbr(int dev, struct mbr *mbr)
       partitions[i].size = mbr->partitions[i].size;
       readsb(dev, &sbs[i]);
     }
-    current_partition = first_bootable_partition;
-    boot_partition = first_bootable_partition;
   }
-
+  current_partition = boot_partition;
   brelse(bp);
 }
 // Read the super block.
@@ -361,8 +354,10 @@ ilock(struct inode *ip)
     memmove(ip->addrs, dip->addrs, sizeof(ip->addrs));
     brelse(bp);
     ip->flags |= I_VALID;
-    if(ip->type == 0)
+    if(ip->type == 0) {
+      cprintf("inum:%d\n", ip->inum);
       panic("ilock: no type");
+    }
   }
 }
 
