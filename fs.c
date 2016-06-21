@@ -722,3 +722,8 @@ nameiparent(char *path, char *name)
 {
   return namex(path, 1, name);
 }
+
+int mount(char * path, uint partition_number){
+  cprintf("NOT IMPLEMENTED!!!!!\n" );
+  return -1;
+}
