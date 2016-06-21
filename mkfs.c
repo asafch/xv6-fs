@@ -105,7 +105,7 @@ main(int argc, char *argv[])
   memset(&mbr.magic[0],0,sizeof(uchar)*2);
 
 
-  for(i = 0; i < FSSIZE; i++)
+  for(i = 0; i < NPARTITIONS * FSSIZE; i++)
     wsect(i, zeroes, 1); // TODO zero all partitions
 
     //write kernel to block 1

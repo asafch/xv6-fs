@@ -51,6 +51,7 @@ struct inode*   nameiparent(char*, char*);
 int             readi(struct inode*, char*, uint, uint);
 void            stati(struct inode*, struct stat*);
 int             writei(struct inode*, char*, uint, uint);
+int 			mount(char * path, uint partition_number);
 
 // ide.c
 void            ideinit(void);

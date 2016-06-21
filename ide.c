@@ -11,6 +11,7 @@
 #include "spinlock.h"
 #include "fs.h"
 #include "buf.h"
+#include "mbr.h"
 
 #define SECTOR_SIZE   512
 #define IDE_BSY       0x80
@@ -73,7 +74,7 @@ idestart(struct buf *b)
 {
   if(b == 0)
     panic("idestart");
-  if(b->blockno >= FSSIZE)
+  if(b->blockno >= NPARTITIONS * FSSIZE)
     panic("incorrect blockno");
   int sector_per_block =  BSIZE/SECTOR_SIZE;
   int sector = b->blockno * sector_per_block;
