@@ -694,8 +694,10 @@ namex(char *path, int nameiparent, char *name)
   struct inode *ip, *next;
   int partition;
   // int partition;
-  if(*path == '/')
+  if(*path == '/') {
+    current_partition = boot_partition;
     ip = iget(ROOTDEV, ROOTINO);
+  }
   else
     ip = idup(proc->cwd);
 
