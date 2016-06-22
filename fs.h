@@ -5,7 +5,8 @@
 #define ROOTINO 1  // root i-number
 #define BSIZE 512  // block size
 #define OFFSET (FSSIZE * current_partition)
-
+#define MAXNUMINDOES 200 //max number in inodes block for each partiton is 200
+#define NPARTITIONS 4 // number partitions
 // Disk layout:
 // [ boot block | super block | log | inode blocks | free bit map | data blocks ]
 //
@@ -55,3 +56,11 @@ struct dirent {
   ushort inum;
   char name[DIRSIZ];
 };
+
+struct pair
+{
+  char inum;
+  char partition;
+};
+
+

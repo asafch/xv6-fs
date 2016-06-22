@@ -14,8 +14,8 @@ struct file {
 // in-memory copy of an inode
 struct inode {
   uint dev;           // Device number
+  uint partition;
   uint inum;          // Inode number
-  uint part;          // Partition number
   int ref;            // Reference count
   int flags;          // I_BUSY, I_VALID
 

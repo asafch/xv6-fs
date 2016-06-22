@@ -25,6 +25,8 @@
 static void itrunc(struct inode*);
 // struct superblock sb;   // there should be one per dev, but we run with one dev
 struct mbr mbr;
+//mapping[num][0] is key , mapping[num][1] is value
+struct pair mapping[MAXNUMINDOES*NPARTITIONS][2];
 int boot_partition = -1;
 int current_partition = 0;
 struct superblock sbs[NPARTITIONS] = {{0, 0, 0, 0, 0, 0, 0},
@@ -95,6 +97,7 @@ readsb(int dev, struct superblock *sb)
   //set offest of sb
   sb->offset = mbr.partitions[current_partition].offset;
   brelse(bp);
+
 }
 
 // Zero a block.
@@ -228,6 +231,7 @@ iinit(int dev)
   // readsb(dev, &sbs[0]);
   cprintf("Boot partition: size %d nblocks %d ninodes %d nlog %d logstart %d inodestart %d bmap start %d\n", sbs[boot_partition].size,
           sbs[boot_partition].nblocks, sbs[boot_partition].ninodes, sbs[current_partition].nlog, sbs[boot_partition].logstart, sbs[boot_partition].inodestart, sbs[boot_partition].bmapstart);
+  memset(&mapping, 0, sizeof(mapping));
 }
 
 static struct inode* iget(uint dev, uint inum);
@@ -249,7 +253,9 @@ ialloc(uint dev, short type)
       dip->type = type;
       log_write(bp);   // mark it allocated on the disk
       brelse(bp);
-      return iget(dev, inum);
+      struct inode* temp = iget(dev, inum);
+      temp->partition = current_partition;
+      return temp;
     }
     brelse(bp);
   }
@@ -303,7 +309,6 @@ iget(uint dev, uint inum)
     panic("iget: no inodes");
 
   ip = empty;
-  ip->part = current_partition;
   ip->dev = dev;
   ip->inum = inum;
   ip->ref = 1;
@@ -666,6 +671,16 @@ skipelem(char *path, char *name)
   return path;
 }
 
+int entry_lookup(struct inode* ip) {
+  int i;
+  for (i = 0; i < NPARTITIONS * MAXNUMINDOES; i++) {
+    if (mapping[i][0].inum == ip->inum && mapping[i][0].partition == ip->partition) {
+      return (int)mapping[i][1].partition;
+    }
+  }
+  return -1;
+}
+
 // Look up and return the inode for a path name.
 // If parent != 0, return the inode for the parent and copy the final
 // path element into name, which must have room for DIRSIZ bytes.
@@ -674,13 +689,14 @@ static struct inode*
 namex(char *path, int nameiparent, char *name)
 {
   struct inode *ip, *next;
-
+  int partition;
   if(*path == '/')
     ip = iget(ROOTDEV, ROOTINO);
   else
     ip = idup(proc->cwd);
 
   while((path = skipelem(path, name)) != 0){
+switched_partition:
     ilock(ip);
     if(ip->type != T_DIR){
       iunlockput(ip);
@@ -692,8 +708,14 @@ namex(char *path, int nameiparent, char *name)
       return ip;
     }
     if((next = dirlookup(ip, name, 0)) == 0){
-      iunlockput(ip);
-      return 0;
+      if ((partition = entry_lookup(ip)) != -1) {
+          current_partition = partition;
+          ip = iget(ROOTDEV, ROOTINO);
+          goto switched_partition;
+      } else {
+          iunlockput(ip);
+          return 0;
+      }
     }
     iunlockput(ip);
     ip = next;
@@ -718,7 +740,41 @@ nameiparent(char *path, char *name)
   return namex(path, 1, name);
 }
 
-int mount(char * path, uint partition_number){
-  cprintf("NOT IMPLEMENTED!!!!!\n" );
+//inserts a mapping to mapping
+//ip is the inode which is being mapped from, partition_number is the partition being mounted to
+int 
+insert_mapping(struct inode * ip,int partition_number){
+  int i;
+  for (i = 0; i < NPARTITIONS * MAXNUMINDOES; i++) {
+    if (mapping[i][0].inum == ip->inum && mapping[i][0].partition == ip->partition) {
+      mapping[i][1].inum = ROOTINO;
+      mapping[i][1].partition = partition_number;
+      return 0;
+    }
+  }
+  for (i = 0; i < NPARTITIONS * MAXNUMINDOES; i++) {
+    if (mapping[i][0].inum == 0) {
+      mapping[i][0].inum = ip->inum;
+      mapping[i][0].partition = ip->partition;
+      mapping[i][1].inum = ROOTINO;
+      mapping[i][1].partition = partition_number;
+      return 0;
+    }
+  }
+  cprintf("insert_mapping failed\n" );
   return -1;
+}
+
+int mount(char * path, uint partition_number){
+  struct inode * ip;
+  if(partition_number < 0 || partition_number > 3){
+    cprintf("partition number out of bounds");
+    return -1;
+  }
+  if((ip = namei(path)) == 0){
+    cprintf("path not found");
+    return -1;
+  }
+  return insert_mapping(ip, partition_number);
+
 }
