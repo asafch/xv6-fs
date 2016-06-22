@@ -15,19 +15,19 @@ main(int argc, char *argv[])
 
   }
   else if(argc < 3){
-    printf(1, "usage: mount path partition_number\n");
+    printf(1, "usage: mount <path> <partition_number>\n");
     exit();
   }
 
   partition_number = atoi(argv[2]);
 
-  printf(1, "trying to mount path: %s, in partition: %d\n",argv[1],partition_number);
+  printf(1, "Trying to mount path: %s, to partition: %d\n", argv[1], partition_number);
   mount_res = mount(argv[1],partition_number);
   if(mount_res == 0){
-     printf(1, "mount succeded!!!\n");
+     printf(1, "Mount succeeded!\n");
   }
   else{
-    printf(1, "mount FAILURE!!!\n");
+    printf(1, "Mount failure!\n");
     exit();
   }
   exit();
