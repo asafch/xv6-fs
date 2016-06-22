@@ -297,6 +297,8 @@ iget(uint dev, uint inum)
   for(ip = &icache.inode[0]; ip < &icache.inode[NINODE]; ip++){
     if(ip->ref > 0 && ip->dev == dev && ip->inum == inum){
       ip->ref++;
+      if (ip->partition != current_partition)
+        ip->partition = current_partition;
       release(&icache.lock);
       return ip;
     }
@@ -313,6 +315,7 @@ iget(uint dev, uint inum)
   ip->inum = inum;
   ip->ref = 1;
   ip->flags = 0;
+  ip->partition = current_partition;
   ip->partitions = partitions;
   release(&icache.lock);
 
@@ -573,6 +576,16 @@ namecmp(const char *s, const char *t)
   return strncmp(s, t, DIRSIZ);
 }
 
+int entry_lookup(struct inode* ip) {
+  int i;
+  for (i = 0; i < NPARTITIONS * MAXNUMINDOES; i++) {
+    if (mapping[i][0].inum == ip->inum && mapping[i][0].partition == ip->partition) {
+      return (int)mapping[i][1].partition;
+    }
+  }
+  return -1;
+}
+
 // Look for a directory entry in a directory.
 // If found, set *poff to byte offset of entry.
 struct inode*
@@ -671,16 +684,6 @@ skipelem(char *path, char *name)
   return path;
 }
 
-int entry_lookup(struct inode* ip) {
-  int i;
-  for (i = 0; i < NPARTITIONS * MAXNUMINDOES; i++) {
-    if (mapping[i][0].inum == ip->inum && mapping[i][0].partition == ip->partition) {
-      return (int)mapping[i][1].partition;
-    }
-  }
-  return -1;
-}
-
 // Look up and return the inode for a path name.
 // If parent != 0, return the inode for the parent and copy the final
 // path element into name, which must have room for DIRSIZ bytes.
@@ -690,13 +693,18 @@ namex(char *path, int nameiparent, char *name)
 {
   struct inode *ip, *next;
   int partition;
+  // int partition;
   if(*path == '/')
     ip = iget(ROOTDEV, ROOTINO);
   else
     ip = idup(proc->cwd);
 
+  if ((partition = entry_lookup(ip)) != -1) {
+    current_partition = partition;
+    ip = iget(ROOTDEV, ROOTINO);
+  }
+
   while((path = skipelem(path, name)) != 0){
-switched_partition:
     ilock(ip);
     if(ip->type != T_DIR){
       iunlockput(ip);
@@ -708,14 +716,8 @@ switched_partition:
       return ip;
     }
     if((next = dirlookup(ip, name, 0)) == 0){
-      if ((partition = entry_lookup(ip)) != -1) {
-          current_partition = partition;
-          ip = iget(ROOTDEV, ROOTINO);
-          goto switched_partition;
-      } else {
-          iunlockput(ip);
-          return 0;
-      }
+        iunlockput(ip);
+        return 0;
     }
     iunlockput(ip);
     ip = next;
@@ -742,7 +744,7 @@ nameiparent(char *path, char *name)
 
 //inserts a mapping to mapping
 //ip is the inode which is being mapped from, partition_number is the partition being mounted to
-int 
+int
 insert_mapping(struct inode * ip,int partition_number){
   int i;
   for (i = 0; i < NPARTITIONS * MAXNUMINDOES; i++) {
