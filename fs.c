@@ -40,7 +40,7 @@ struct partition partitions[NPARTITIONS] = {{0, 0, 0, 0, 0},
 
 int checkForBootPrograms(int index) {
   // TODO implement
-  return boot_partition == -1 ? 0 : boot_partition;
+  return boot_partition == -1 ? index : boot_partition;
 }
 
 void
