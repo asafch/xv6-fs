@@ -270,7 +270,7 @@ iupdate(struct inode *ip)
   struct dinode *dip;
 
 
-  bp = bread(ip->dev, IBLOCK(ip->inum, sbs[current_partition]) + partitions[current_partition].offset);
+  bp = bread(ip->dev, IBLOCK(ip->inum, sbs[ip->partition]) + partitions[ip->partition].offset);
   dip = (struct dinode*)bp->data + ip->inum%IPB;
   dip->type = ip->type;
   dip->major = ip->major;
@@ -295,10 +295,10 @@ iget(uint dev, uint inum)
   // Is the inode already cached?
   empty = 0;
   for(ip = &icache.inode[0]; ip < &icache.inode[NINODE]; ip++){
-    if(ip->ref > 0 && ip->dev == dev && ip->inum == inum){
+    if(ip->ref > 0 && ip->dev == dev && ip->inum == inum && ip->partition == current_partition){
       ip->ref++;
-      if (ip->partition != current_partition)
-        ip->partition = current_partition;
+      // if (ip->partition != current_partition)
+      //   ip->partition = current_partition;
       release(&icache.lock);
       return ip;
     }
@@ -351,7 +351,7 @@ ilock(struct inode *ip)
   release(&icache.lock);
 
   if(!(ip->flags & I_VALID)){
-    bp = bread(ip->dev, IBLOCK(ip->inum, sbs[current_partition]) + partitions[current_partition].offset);
+    bp = bread(ip->dev, IBLOCK(ip->inum, sbs[ip->partition]) + partitions[ip->partition].offset);
     dip = (struct dinode*)bp->data + ip->inum%IPB;
     ip->type = dip->type;
     ip->major = dip->major;
@@ -446,7 +446,7 @@ bmap(struct inode *ip, uint bn)
     if((addr = ip->addrs[NDIRECT]) == 0)
       // NOTE during testing, check if balloc returns a relative block number
       ip->addrs[NDIRECT] = addr = balloc(ip->dev);
-    bp = bread(ip->dev, addr + partitions[current_partition].offset);
+    bp = bread(ip->dev, addr + partitions[ip->partition].offset);
     a = (uint*)bp->data;
     if((addr = a[bn]) == 0){
       a[bn] = addr = balloc(ip->dev);
@@ -479,7 +479,7 @@ itrunc(struct inode *ip)
   }
 
   if(ip->addrs[NDIRECT]){
-    bp = bread(ip->dev, ip->addrs[NDIRECT] + partitions[current_partition].offset);
+    bp = bread(ip->dev, ip->addrs[NDIRECT] + partitions[ip->partition].offset);
     a = (uint*)bp->data;
     for(j = 0; j < NINDIRECT; j++){
       if(a[j])
@@ -525,7 +525,7 @@ readi(struct inode *ip, char *dst, uint off, uint n)
     n = ip->size - off;
 
   for(tot=0; tot<n; tot+=m, off+=m, dst+=m){
-    bp = bread(ip->dev, bmap(ip, off/BSIZE) + partitions[current_partition].offset);
+    bp = bread(ip->dev, bmap(ip, off/BSIZE) + partitions[ip->partition].offset);
     m = min(n - tot, BSIZE - off%BSIZE);
     memmove(dst, bp->data + off%BSIZE, m);
     brelse(bp);
@@ -553,7 +553,7 @@ writei(struct inode *ip, char *src, uint off, uint n)
     return -1;
 
   for(tot=0; tot<n; tot+=m, off+=m, src+=m){
-    bp = bread(ip->dev, bmap(ip, off/BSIZE) + partitions[current_partition].offset);
+    bp = bread(ip->dev, bmap(ip, off/BSIZE) + partitions[ip->partition].offset);
     m = min(n - tot, BSIZE - off%BSIZE);
     memmove(bp->data + off%BSIZE, src, m);
     log_write(bp);
@@ -576,10 +576,10 @@ namecmp(const char *s, const char *t)
   return strncmp(s, t, DIRSIZ);
 }
 
-int entry_lookup(struct inode* ip) {
+int entry_lookup(uint inum, int partition) {
   int i;
   for (i = 0; i < NPARTITIONS * MAXNUMINDOES; i++) {
-    if (mapping[i][0].inum == ip->inum && mapping[i][0].partition == ip->partition) {
+    if (mapping[i][0].inum == inum && mapping[i][0].partition == partition) {
       return (int)mapping[i][1].partition;
     }
   }
@@ -593,6 +593,7 @@ dirlookup(struct inode *dp, char *name, uint *poff)
 {
   uint off, inum;
   struct dirent de;
+  int partition, old_partition;
 
   if(dp->type != T_DIR)
     panic("dirlookup not DIR");
@@ -607,6 +608,13 @@ dirlookup(struct inode *dp, char *name, uint *poff)
       if(poff)
         *poff = off;
       inum = de.inum;
+      if ((partition = entry_lookup(inum, dp->partition)) != -1) {
+        old_partition = current_partition;
+        current_partition = partition;
+        dp = iget(ROOTDEV, ROOTINO);
+        current_partition = old_partition;
+        return dp;
+      }
       return iget(dp->dev, inum);
     }
   }
@@ -692,8 +700,8 @@ static struct inode*
 namex(char *path, int nameiparent, char *name)
 {
   struct inode *ip, *next;
-  int partition;
-  // int partition;
+  // int partition, old_partition;
+
   if(*path == '/') {
     current_partition = boot_partition;
     ip = iget(ROOTDEV, ROOTINO);
@@ -701,10 +709,12 @@ namex(char *path, int nameiparent, char *name)
   else
     ip = idup(proc->cwd);
 
-  if ((partition = entry_lookup(ip)) != -1) {
-    current_partition = partition;
-    ip = iget(ROOTDEV, ROOTINO);
-  }
+  // if ((partition = entry_lookup(ip->inum, ip->partition)) != -1) {
+  //   old_partition = current_partition;
+  //   current_partition = partition;
+  //   ip = iget(ROOTDEV, ROOTINO);
+  //   current_partition = old_partition;
+  // }
 
   while((path = skipelem(path, name)) != 0){
     ilock(ip);
@@ -765,20 +775,23 @@ insert_mapping(struct inode * ip,int partition_number){
       return 0;
     }
   }
-  cprintf("insert_mapping failed\n" );
+  cprintf("kernel: insert_mapping failed\n" );
   return -1;
 }
 
 int mount(char * path, uint partition_number){
   struct inode * ip;
   if(partition_number < 0 || partition_number > 3){
-    cprintf("partition number out of bounds");
+    cprintf("kernel: mount: partition number out of bounds\n");
     return -1;
   }
   if((ip = namei(path)) == 0){
-    cprintf("path not found");
+    cprintf("kernel: mount: path not found\n");
     return -1;
   }
   return insert_mapping(ip, partition_number);
+}
 
+void switch_partition(int partition) {
+  current_partition = partition;
 }
